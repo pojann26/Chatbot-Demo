@@ -4,13 +4,19 @@ const { Boom } = require('@hapi/boom');
 const qrcode = require('qrcode-terminal');
 const mongoose = require('mongoose');
 const pino = require('pino');
+
 const { mongoURI } = require('./config');
 const { handleMessage } = require('./bot/handler');
 
+// --- KONEKSI DATABASE ---
 mongoose.connect(mongoURI)
-    .then(() => console.log('✅ MongoDB: Terhubung'))
-    .catch(err => { console.error('❌ MongoDB gagal:', err); process.exit(1); });
+    .then(() => console.log('✅ MongoDB Terhubung'))
+    .catch(err => {
+        console.error('❌ Gagal koneksi MongoDB:', err.message);
+        process.exit(1);
+    });
 
+// --- BOT ---
 async function startBot() {
     const { state, saveCreds } = await useMultiFileAuthState('auth_info');
     const { version } = await fetchLatestBaileysVersion();
@@ -21,8 +27,6 @@ async function startBot() {
         logger: pino({ level: 'warn' }),
         printQRInTerminal: false,
         browser: ['Windows', 'Chrome', '11.0.0'],
-        defaultQueryTimeoutMs: undefined,
-        connectTimeoutMs: 60000
     });
 
     sock.ev.on('creds.update', saveCreds);
@@ -30,19 +34,18 @@ async function startBot() {
     sock.ev.on('connection.update', (update) => {
         const { connection, lastDisconnect, qr } = update;
         if (qr) {
-            console.log('--- SCAN QR CODE DI BAWAH INI ---');
+            console.log('📱 Scan QR Code berikut:');
             qrcode.generate(qr, { small: true });
         }
         if (connection === 'close') {
-            const shouldReconnect = (lastDisconnect?.error instanceof Boom)?.output?.statusCode !== DisconnectReason.loggedOut;
-            if (shouldReconnect) {
-                console.log('🔄 Reconnecting...');
-                startBot();
-            } else {
-                console.log('🔴 Bot logged out. Scan ulang QR.');
-            }
+            const shouldReconnect =
+                (lastDisconnect?.error instanceof Boom)
+                    ? lastDisconnect.error?.output?.statusCode !== DisconnectReason.loggedOut
+                    : true;
+            console.log('🔌 Koneksi terputus. Reconnect:', shouldReconnect);
+            if (shouldReconnect) startBot();
         } else if (connection === 'open') {
-            console.log('🚀 BOT WHATSAPP ONLINE!');
+            console.log('🚀 SobatCare BOT ONLINE!');
         }
     });
 
@@ -51,16 +54,20 @@ async function startBot() {
         if (!msg.message || msg.key.fromMe) return;
 
         const from = msg.key.remoteJid;
-        if (from.endsWith('@g.us')) return;
+        if (from.endsWith('@g.us')) return; // Abaikan pesan grup
 
-        const text = (
+        const text =
             msg.message.conversation ||
-            msg.message.extendedTextMessage?.text || ''
-        ).toLowerCase().trim();
+            msg.message.extendedTextMessage?.text ||
+            '';
 
-        if (!text) return;
+        if (!text.trim()) return;
 
-        await handleMessage(sock, from, text);
+        try {
+            await handleMessage(sock, from, text);
+        } catch (err) {
+            console.error(`❌ Error handleMessage [${from}]:`, err);
+        }
     });
 }
 

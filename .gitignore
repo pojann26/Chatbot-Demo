@@ -1,4 +1,19 @@
+# Dependencies
 node_modules/
+
+# WhatsApp session
 auth_info/
+
+# Environment & secrets
 .env
 google-key.json
+
+# OS & editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Logs
+*.log
+npm-debug.log*

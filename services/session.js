@@ -14,10 +14,10 @@ async function getSession(phoneNumber) {
     return session;
 }
 
-async function setSession(phoneNumber, state, categoryKey = null) {
+async function setSession(phoneNumber, state, categoryKey = null, extra = {}) {
     await Session.findOneAndUpdate(
         { phoneNumber },
-        { state, categoryKey, updatedAt: new Date() },
+        { state, categoryKey, extra, updatedAt: new Date() },
         { upsert: true, new: true }
     );
 }

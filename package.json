@@ -16,6 +16,7 @@
     "google-auth-library": "^10.6.1",
     "google-spreadsheet": "^5.2.0",
     "libsignal-node": "^2.0.1",
+    "link-preview-js": "^3.2.0",
     "mongoose": "^9.3.0",
     "pino": "^10.3.1",
     "qrcode-terminal": "^0.12.0",
