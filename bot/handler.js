@@ -1,6 +1,6 @@
 const { v4: uuidv4 } = require('uuid');
 const { menus, keywords, triggers, adminNumber, emergencyKeywords, isOperationalHour } = require('../config');
-const { getSession, setSession, clearSession } = require('../services/session');
+const { getSession, setSession, clearSession, acquireLock, releaseLock } = require('../services/session');
 const { saveToSheets, updateSheetStatus } = require('../services/sheets');
 const { isRateLimited } = require('../utils/rateLimiter');
 const Report = require('../models/Report');
@@ -11,10 +11,10 @@ const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 const MSG_WELCOME_OPERATIONAL =
     'Halo Sobat! 👋\n\n' +
     'Selamat datang di *SobatCare* 🤝\n' +
-    '_"Tempat Kamu Didengar, Dibantu, dan Diperjuangkan."_\n\n' +
+    '_\"Tempat Kamu Didengar, Dibantu, dan Diperjuangkan.\"_\n\n' +
     'Aku SobatKM, siap bantu kamu hari ini 🤝\n\n' +
     'Ada yang bisa aku bantu?\n' +
-    'Silakan ketik *"Halo SobatCare"* untuk mulai ya 😊';
+    'Silakan ketik *\"Halo SobatCare\"* untuk mulai ya 😊';
 
 const MSG_WELCOME_OFFLINE =
     'Halo Sobat! 👋\n\n' +
@@ -22,7 +22,7 @@ const MSG_WELCOME_OFFLINE =
     'Saat ini kami sedang di luar jam layanan\n' +
     '*(07.00–22.00 WIB)* ⏰\n\n' +
     'Tapi tenang, pesanmu tetap kami terima ya 💙\n\n' +
-    'Silahkan ketik *"halo admin"*, nanti akan kami respon secepatnya saat online 😊';
+    'Silahkan ketik *\"halo admin\"*, nanti akan kami respon secepatnya saat online 😊';
 
 const MSG_MAIN_MENU =
     'Sobat lagi butuh bantuan apa nih? 😊\n\n' +
@@ -110,6 +110,21 @@ function buildAdminNotif(type, data) {
 
 // --- HANDLER UTAMA ---
 async function handleMessage(sock, from, text) {
+    // FIX: Cegah race condition — kalau user yang sama sedang diproses, skip pesan berikutnya
+    if (!acquireLock(from)) {
+        console.log(`⏳ [${from}] Pesan di-skip, masih diproses`);
+        return;
+    }
+
+    try {
+        await _handleMessage(sock, from, text);
+    } finally {
+        // FIX: Pastikan lock selalu dilepas meski ada error
+        releaseLock(from);
+    }
+}
+
+async function _handleMessage(sock, from, text) {
     const normalizedText = text.toLowerCase().trim();
     const isTrigger = triggers.includes(normalizedText);
     const session = await getSession(from);
@@ -128,7 +143,7 @@ async function handleMessage(sock, from, text) {
             text:
                 'Halo Sobat! 👋\n\n' +
                 'Selamat datang di *SobatCare* 🤝\n' +
-                '_"Tempat Kamu Didengar, Dibantu, dan Diperjuangkan."_\n\n' +
+                '_\"Tempat Kamu Didengar, Dibantu, dan Diperjuangkan.\"_\n\n' +
                 'Sebelum mulai, boleh aku kenalan dulu? 😊\n\n' +
                 'Silakan kirim data dirimu dengan format:\n' +
                 '👉 *Nama Lengkap | NIM*\n\n' +
@@ -142,7 +157,6 @@ async function handleMessage(sock, from, text) {
         await sock.sendPresenceUpdate('composing', from);
         await delay(1000);
 
-        // Cek format pemisah |
         if (!text.includes('|')) {
             await sock.sendMessage(from, {
                 text:
@@ -157,27 +171,14 @@ async function handleMessage(sock, from, text) {
         const [nama, nimRaw] = text.split('|').map(v => v.trim());
         const nim = nimRaw?.toUpperCase();
 
-        // Cek nama tidak kosong
         if (!nama || nama.length < 2) {
             await sock.sendMessage(from, {
-                text:
-                    '⚠️ Nama tidak boleh kosong ya Sobat 😊\n\n' +
-                    'Format: *Nama Lengkap | NIM*'
+                text: '⚠️ Nama tidak boleh kosong ya Sobat 😊\n\nFormat: *Nama Lengkap | NIM*'
             });
             return;
         }
 
-        // Validasi NIM IPB:
-        // - Tepat 11 karakter
-        // - Digit 1: huruf kode fakultas/sekolah (A-Z) atau X (inbound)
-        // - Digit 2: angka (kode departemen / lokasi kampus)
-        // - Digit 3: angka strata (4=Sarjana/Terapan, 5=Magister, 6=Doktor, 9=Profesi)
-        // - Digit 4-5: angka kode prodi
-        // - Digit 6-7: angka tahun masuk (00-99)
-        // - Digit 8: periode masuk (1=Gasal, 2=Genap)
-        // - Digit 9-11: nomor urut (001-999)
         const nimRegex = /^[A-Z]\d[4569]\d{2}\d{2}\d\d{3}$/;
-
         if (!nim || nim.length !== 11 || !nimRegex.test(nim)) {
             await sock.sendMessage(from, {
                 text:
@@ -191,10 +192,7 @@ async function handleMessage(sock, from, text) {
 
         await setSession(from, 'MAIN_MENU', null, { nama, nim });
         await sock.sendMessage(from, {
-            text:
-                `Halo *${nama}* 👋\n\n` +
-                'Data kamu sudah kami terima 🤝\n\n' +
-                MSG_MAIN_MENU
+            text: `Halo *${nama}* 👋\n\nData kamu sudah kami terima 🤝\n\n` + MSG_MAIN_MENU
         });
         return;
     }
@@ -212,7 +210,6 @@ async function handleMessage(sock, from, text) {
         return;
     }
 
-    // Bukan keyword/trigger dan tidak ada sesi aktif — abaikan
     if (!isInSession) return;
 
     console.log(`📩 [${new Date().toISOString()}] ${from} | "${normalizedText}" | State: ${session.state}`);
@@ -224,7 +221,7 @@ async function handleMessage(sock, from, text) {
     if (session.state === 'MAIN_MENU') {
         const chosen = menus[normalizedText];
         if (!chosen) {
-            await sock.sendMessage(from, { text: '⚠️ Ketik angka *1-5* saja ya Sobat, atau ketik *"Halo SobatCare"* untuk mulai ulang.' });
+            await sock.sendMessage(from, { text: '⚠️ Ketik angka *1-5* saja ya Sobat, atau ketik *\"Halo SobatCare\"* untuk mulai ulang.' });
             return;
         }
         if (normalizedText === '4') {
@@ -242,48 +239,46 @@ async function handleMessage(sock, from, text) {
         return;
     }
 
-// B. SUB MENU
-const subStates = ['SUB_KESEJAHTERAAN', 'SUB_AKADEMIK', 'SUB_ASPIRASI'];
-if (subStates.includes(session.state)) {
-    const categoryData = menus[session.categoryKey];
-    const subItem = categoryData?.subMenu[normalizedText];
+    // B. SUB MENU
+    const subStates = ['SUB_KESEJAHTERAAN', 'SUB_AKADEMIK', 'SUB_ASPIRASI'];
+    if (subStates.includes(session.state)) {
+        const categoryData = menus[session.categoryKey];
+        const subItem = categoryData?.subMenu[normalizedText];
 
-    if (!subItem) {
-        const maxOption = Object.keys(categoryData.subMenu).length;
-        await sock.sendMessage(from, { text: `⚠️ Ketik angka *1-${maxOption}* saja ya Sobat 😊` });
-        return;
-    }
+        if (!subItem) {
+            const maxOption = Object.keys(categoryData.subMenu).length;
+            await sock.sendMessage(from, { text: `⚠️ Ketik angka *1-${maxOption}* saja ya Sobat 😊` });
+            return;
+        }
 
-    // Tipe INFO — langsung balas dengan info, lanjut ke feedback
-    if (subItem.type === 'INFO' || subItem.type === 'MULTI_INFO') {
-        await sock.sendMessage(from, { text: subItem.response });
-        await delay(500);
+        if (subItem.type === 'INFO' || subItem.type === 'MULTI_INFO') {
+            await sock.sendMessage(from, { text: subItem.response });
+            await delay(500);
 
-        // Catat ke Sheets
-        const reportId = `SC-${uuidv4().slice(0, 8).toUpperCase()}`;
-        await saveToSheets({
-            reportId,
-            nama: session.extra?.nama || '-',
-            nim: session.extra?.nim || '-',
-            category: categoryData.label,
-            subCategory: subItem.label,
-            isEmergency: false,
-            keterangan: 'Permintaan informasi',
-            status: 'Info Diberikan'
-        });
+            const reportId = `SC-${uuidv4().slice(0, 8).toUpperCase()}`;
+            const sheetRowNumber = await saveToSheets({
+                reportId,
+                nama: session.extra?.nama || '-',
+                nim: session.extra?.nim || '-',
+                category: categoryData.label,
+                subCategory: subItem.label,
+                isEmergency: false,
+                keterangan: 'Permintaan informasi',
+                status: 'Info Diberikan'
+            });
 
-        await setSession(from, 'FEEDBACK', null, {
-            reportId,
-            nama: session.extra?.nama,
-            nim: session.extra?.nim,
-            category: categoryData.label,
-            subCategory: subItem.label
-        });
-        await sock.sendMessage(from, { text: MSG_SUDAH_TERBANTU });
-        return;
-    }
+            await setSession(from, 'FEEDBACK', null, {
+                reportId,
+                sheetRowNumber,
+                nama: session.extra?.nama,
+                nim: session.extra?.nim,
+                category: categoryData.label,
+                subCategory: subItem.label
+            });
+            await sock.sendMessage(from, { text: MSG_SUDAH_TERBANTU });
+            return;
+        }
 
-        // Tipe INPUT — user perlu tulis masalahnya
         await setSession(from, 'INPUT_MASALAH', session.categoryKey, {
             menuLabel: categoryData.label,
             subLabel: subItem.label,
@@ -322,10 +317,15 @@ if (subStates.includes(session.state)) {
 
         try {
             await Report.create(reportData);
-            await saveToSheets(reportData);
+            const sheetRowNumber = await saveToSheets(reportData);
+            // Simpan nomor baris Sheets ke MongoDB agar bisa diupdate langsung nanti
+            if (sheetRowNumber) {
+                await Report.findOneAndUpdate({ reportId }, { sheetRowNumber });
+            }
             await sock.sendMessage(adminNumber, { text: buildAdminNotif('laporan', reportData) });
             await setSession(from, 'FEEDBACK', null, {
                 reportId,
+                sheetRowNumber,
                 category: menuLabel,
                 subCategory: subLabel,
                 nama: session.extra?.nama || '-',
@@ -354,6 +354,8 @@ if (subStates.includes(session.state)) {
                 const reportData = {
                     reportId,
                     phoneNumber: from.split('@')[0],
+                    nama: session.extra?.nama || '-',
+                    nim: session.extra?.nim || '-',
                     category: 'Sobat Curhat',
                     subCategory: 'Minta Dihubungi Admin',
                     isEmergency: false,
@@ -361,13 +363,16 @@ if (subStates.includes(session.state)) {
                     status: 'Masuk'
                 };
                 await Report.create(reportData);
-                await saveToSheets(reportData);
+                const sheetRowNumber = await saveToSheets(reportData);
+                if (sheetRowNumber) {
+                    await Report.findOneAndUpdate({ reportId }, { sheetRowNumber });
+                }
                 await sock.sendMessage(adminNumber, { text: buildAdminNotif('curhat', reportData) });
                 await sock.sendMessage(from, { text: MSG_ESCALATE });
                 await clearSession(from);
             } else if (normalizedText === '2') {
                 await sock.sendMessage(from, {
-                    text: 'Oke Sobat, semangat terus yah! 💙\nIngat, kamu tidak sendirian 🤝\n\nKetik *"Halo SobatCare"* kalau butuh bantuan lagi ya 😊'
+                    text: 'Oke Sobat, semangat terus yah! 💙\nIngat, kamu tidak sendirian 🤝\n\nKetik *\"Halo SobatCare\"* kalau butuh bantuan lagi ya 😊'
                 });
                 await clearSession(from);
             } else {
@@ -398,7 +403,10 @@ if (subStates.includes(session.state)) {
 
         try {
             await Report.create(reportData);
-            await saveToSheets(reportData);
+            const sheetRowNumber = await saveToSheets(reportData);
+            if (sheetRowNumber) {
+                await Report.findOneAndUpdate({ reportId }, { sheetRowNumber });
+            }
             await sock.sendMessage(adminNumber, { text: buildAdminNotif('mimin', reportData) });
             await sock.sendMessage(from, { text: MSG_ESCALATE });
             await clearSession(from);
@@ -414,11 +422,19 @@ if (subStates.includes(session.state)) {
         if (normalizedText === '1') {
             await sock.sendMessage(from, { text: MSG_CLOSING });
             if (session.extra?.reportId) {
-                await updateSheetStatus(session.extra.reportId, 'Selesai');
+                await Report.findOneAndUpdate(
+                    { reportId: session.extra.reportId },
+                    { status: 'Selesai' }
+                );
+                await updateSheetStatus(session.extra.reportId, 'Selesai', session.extra.sheetRowNumber);
             }
             await clearSession(from);
         } else if (normalizedText === '2') {
             if (session.extra?.reportId) {
+                await Report.findOneAndUpdate(
+                    { reportId: session.extra.reportId },
+                    { status: 'Eskalasi' }
+                );
                 await sock.sendMessage(adminNumber, {
                     text: buildAdminNotif('belum', {
                         reportId: session.extra.reportId,
@@ -428,9 +444,8 @@ if (subStates.includes(session.state)) {
                         nim: session.extra?.nim || '-'
                     })
                 });
-                await updateSheetStatus(session.extra.reportId, 'Eskalasi');
+                await updateSheetStatus(session.extra.reportId, 'Eskalasi', session.extra.sheetRowNumber);
             } else {
-                // Sub-menu INFO yang belum terbantu — escalate ke admin
                 await sock.sendMessage(adminNumber, {
                     text: `⚠️ *INFO BELUM MEMBANTU*\n\n📂 *Kategori:* ${session.extra?.category}\n🔍 *Sub:* ${session.extra?.subCategory}\n\n_Sobat butuh bantuan lebih lanjut!_`
                 });
