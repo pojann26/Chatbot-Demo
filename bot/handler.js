@@ -131,7 +131,7 @@ async function _handleMessage(sock, from, text) {
     const isInSession = session && session.state !== 'DONE';
 
     // Trigger — masuk ke state INPUT_IDENTITAS dulu
-    if (isTrigger) {
+    if (isTrigger && !isInSession) {
         await sock.sendPresenceUpdate('composing', from);
         await delay(1000);
         if (!isOperationalHour()) {
