@@ -62,7 +62,7 @@ module.exports = {
                     response:
                         '📋 *Informasi UKT & Beasiswa* 📋\n\n' +
                         '🎓 *Portal Peduli UKT IPB:*\n' +
-                        '👉 _(segera diupdate)_\n\n' +
+                        '👉 https://ipb.link/peduli-ukt-smstr-ganjil-26-27\n\n' +
                         '🏆 *Beasiswa IPB:*\n' +
                         '👉 https://www.instagram.com/beasiswaipb\n\n' +
                         '💙 *SayangKM IPB:*\n' +
