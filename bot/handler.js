@@ -147,7 +147,7 @@ async function _handleMessage(sock, from, text) {
                 'Sebelum mulai, boleh aku kenalan dulu? 😊\n\n' +
                 'Silakan kirim data dirimu dengan format:\n' +
                 '👉 *Nama Lengkap | NIM*\n\n' +
-                'Contoh: _Budi Santoso | J0401231001_'
+                'Contoh: Budi Santoso | J0401231001'
         });
         return;
     }
