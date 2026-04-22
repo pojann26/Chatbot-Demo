@@ -163,7 +163,7 @@ async function _handleMessage(sock, from, text) {
                     '⚠️ Format belum sesuai nih Sobat 😊\n\n' +
                     'Coba kirim ulang dengan format:\n' +
                     '👉 *Nama Lengkap | NIM*\n\n' +
-                    'Contoh: _Budi Santoso | J0409241025_'
+                    'Contoh: Budi Santoso | J0409241025'
             });
             return;
         }
